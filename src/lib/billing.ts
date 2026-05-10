@@ -1,13 +1,33 @@
 import type { Client, UsageEntry, Tier } from './types'
 
+// Flat lookup: returns the price for the bracket the amount falls into (used by TIERED_CONV, TIERED_REL)
 function applyTiers(amount: number, tiers: Tier[]): number {
   if (!tiers || tiers.length === 0) return 0
   const sorted = [...tiers].filter(t => t.limit > 0).sort((a, b) => a.limit - b.limit)
   for (const tier of sorted) {
     if (amount <= tier.limit) return tier.price
   }
-  // above highest tier — use last tier price
   return sorted[sorted.length - 1]?.price ?? 0
+}
+
+// Cumulative marginal: each tier's rate applies only to units within that bracket (used by TIERED_SALES)
+// Matches Excel: =base + MIN(d,t1)*r1 + MAX(0,MIN(d,t2)-t1)*r2 + ... + MAX(0,d-tN)*rN
+function applyCumulativeTiers(amount: number, tiers: Tier[]): number {
+  if (!tiers || tiers.length === 0) return 0
+  const sorted = [...tiers].filter(t => t.limit > 0).sort((a, b) => a.limit - b.limit)
+  let total = 0
+  let prev = 0
+  for (const tier of sorted) {
+    const inBracket = Math.max(0, Math.min(amount, tier.limit) - prev)
+    total += inBracket * tier.price
+    prev = tier.limit
+    if (amount <= tier.limit) break
+  }
+  // above highest tier — use last tier's rate
+  if (amount > prev) {
+    total += (amount - prev) * (sorted[sorted.length - 1]?.price ?? 0)
+  }
+  return total
 }
 
 function getUsage(entries: UsageEntry[], metric: string): number {
@@ -67,9 +87,8 @@ export function calculateRevenue(
 
     case 'TIERED_SALES': {
       const sales = getUsage(usageEntries, 'Sales')
-      // Panda model: fixed base + tiered per sale
-      const perSaleTier = applyTiers(sales, tiers)
-      amount = fixed_fee + perSaleTier
+      // Panda: fixed base + cumulative marginal tier pricing on sales
+      amount = fixed_fee + applyCumulativeTiers(sales, tiers)
       break
     }
 
