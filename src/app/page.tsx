@@ -55,7 +55,7 @@ const RANGE_OPTIONS = [
 ]
 
 export default function Dashboard() {
-  const [month, setMonth] = useState<Date>(startOfMonth(new Date()))
+  const [month, setMonth] = useState<Date>(startOfMonth(subMonths(new Date(), 1)))
   const [clients, setClients] = useState<Client[]>([])
   const [revenues, setRevenues] = useState<MonthlyRevenue[]>([])
   const [summary, setSummary] = useState<MonthlySummary[]>([])
