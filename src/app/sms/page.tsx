@@ -4,14 +4,11 @@ import { useEffect, useState, useCallback } from 'react'
 import { format, subMonths, addMonths, startOfMonth } from 'date-fns'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import type { Client } from '@/lib/types'
 
-interface SmsRow {
-  id: number
+interface SmsEntry {
   client_id: number
-  client_name: string
-  month: string
   sms_count: number
-  twilio_cost: number | null
 }
 
 interface Settings {
@@ -25,37 +22,43 @@ function fmt2(n: number) { return '$' + n.toFixed(2) }
 
 export default function SmsPage() {
   const [month, setMonth] = useState<Date>(startOfMonth(new Date()))
-  const [rows, setRows] = useState<SmsRow[]>([])
+  const [clients, setClients] = useState<Client[]>([])
+  const [entries, setEntries] = useState<SmsEntry[]>([])
   const [settings, setSettings] = useState<Settings>({ twilio_cost_per_sms: 0.007, sms_bill_rate: 0.008, exchange_rate: 3.6 })
   const [saving, setSaving] = useState<number | null>(null)
 
   const fetchData = useCallback(async () => {
-    const [s, r] = await Promise.all([
+    const [c, s, r] = await Promise.all([
+      fetch('/api/clients').then(r => r.json()),
       fetch('/api/settings').then(r => r.json()),
       fetch(`/api/sms?month=${monthKey(month)}`).then(r => r.json()),
     ])
+    setClients(c)
     setSettings(s)
-    setRows(r)
+    setEntries(r)
   }, [month])
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  async function saveSms(clientId: number, smsCount: number) {
+  function getCount(clientId: number) {
+    return entries.find(e => e.client_id === clientId)?.sms_count ?? 0
+  }
+
+  async function saveEntry(clientId: number, value: string) {
+    const count = parseFloat(value) || 0
+    if (count === getCount(clientId)) return
     setSaving(clientId)
     await fetch('/api/sms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, month: monthKey(month), sms_count: smsCount }),
+      body: JSON.stringify({ client_id: clientId, month: monthKey(month), sms_count: count }),
     })
     await fetchData()
     setSaving(null)
   }
 
-  function getSmsCount(clientId: number) {
-    return rows.find(r => r.client_id === clientId)?.sms_count ?? 0
-  }
-
-  const totalSms = rows.reduce((s, r) => s + r.sms_count, 0)
+  const activeClients = clients.filter(c => !['Churned', 'Pipeline', 'Paused'].includes(c.status))
+  const totalSms = entries.reduce((s, e) => s + e.sms_count, 0)
   const totalCost = totalSms * settings.twilio_cost_per_sms
   const totalBill = totalSms * settings.sms_bill_rate
   const totalMargin = totalBill - totalCost
@@ -78,7 +81,6 @@ export default function SmsPage() {
         </div>
       </div>
 
-      {/* Summary */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         {[
           { label: 'Total SMS', value: totalSms.toLocaleString(), color: 'text-gray-800' },
@@ -105,31 +107,33 @@ export default function SmsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={5} className="text-center py-8 text-gray-400">No SMS data for this month</td></tr>
-            ) : rows.map(row => {
-              const cost = row.sms_count * settings.twilio_cost_per_sms
-              const bill = row.sms_count * settings.sms_bill_rate
+            {activeClients.map(client => {
+              const count = getCount(client.id)
+              const cost = count * settings.twilio_cost_per_sms
+              const bill = count * settings.sms_bill_rate
               const margin = bill - cost
               return (
-                <tr key={row.client_id} className="border-b last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{row.client_name}</td>
+                <tr key={client.id} className="border-b last:border-0 hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">{client.name}</td>
                   <td className="px-4 py-3 text-right">
                     <input
-                      className={`w-28 text-right border rounded px-2 py-1 text-sm ${saving === row.client_id ? 'border-blue-300' : ''}`}
-                      defaultValue={getSmsCount(row.client_id)}
-                      key={`${monthKey(month)}-${row.client_id}`}
-                      onBlur={e => saveSms(row.client_id, parseFloat(e.target.value) || 0)}
+                      className={`w-28 text-right border rounded px-2 py-1 text-sm transition-colors ${
+                        saving === client.id ? 'border-blue-300 bg-blue-50' : 'border-gray-200'
+                      }`}
+                      defaultValue={count || ''}
+                      placeholder="0"
+                      key={`${monthKey(month)}-${client.id}`}
+                      onBlur={e => saveEntry(client.id, e.target.value)}
                     />
                   </td>
-                  <td className="px-4 py-3 text-right text-red-600">{fmt2(cost)}</td>
-                  <td className="px-4 py-3 text-right text-green-700">{fmt2(bill)}</td>
-                  <td className="px-4 py-3 text-right text-blue-700">{fmt2(margin)}</td>
+                  <td className="px-4 py-3 text-right text-red-600">{count > 0 ? fmt2(cost) : '—'}</td>
+                  <td className="px-4 py-3 text-right text-green-700">{count > 0 ? fmt2(bill) : '—'}</td>
+                  <td className="px-4 py-3 text-right text-blue-700">{count > 0 ? fmt2(margin) : '—'}</td>
                 </tr>
               )
             })}
           </tbody>
-          {rows.length > 0 && (
+          {totalSms > 0 && (
             <tfoot>
               <tr className="bg-gray-50 border-t font-semibold">
                 <td className="px-4 py-3 text-gray-700">Total</td>
@@ -142,6 +146,7 @@ export default function SmsPage() {
           )}
         </table>
       </div>
+      <p className="text-xs text-gray-400 mt-3">Enter SMS count per client. Saves automatically on blur. Clients with 0 SMS show —</p>
     </div>
   )
 }
